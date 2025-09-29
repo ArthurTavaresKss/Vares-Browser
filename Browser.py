@@ -386,18 +386,17 @@ class Browser:
         
     def mouseWheelScroll(self, e):
         if os.name == 'nt':  # Windows
-            scroll_amount = -e.delta // 60 * SCROLL_STEP
+            scroll_amount = -int(e.delta / 120) * SCROLL_STEP
         elif os.name == 'posix':  # Linux / Mac
-            scroll_amount = e.delta // 60 * SCROLL_STEP
+            scroll_amount = int(e.delta) * SCROLL_STEP
         else:
             scroll_amount = 0  # fallback if another OS
+
+        # Calculates new scroll position
+        new_scroll = self.scroll + scroll_amount
             
-        if self.scroll + scroll_amount < 0:
-            self.scroll = 0
-        elif self.scroll + scroll_amount > (self.biggest_y + VSTEP) - HEIGHT:
-            self.scroll = (self.biggest_y + VSTEP) - HEIGHT
-        else:
-            self.scroll += scroll_amount
+        max_scroll = max(0, (self.biggest_y + VSTEP) - HEIGHT)
+        self.scroll = max(0, min(new_scroll, max_scroll))
         self.draw()
         
     def scrolldown(self, e):
@@ -431,6 +430,7 @@ if __name__ == "__main__":
     if len(sys.argv) <= 1:
         default_file = os.path.join(os.path.dirname(__file__), "Default.html")
         Browser().load(URL(f"file:///{default_file}"))
+        tkinter.mainloop()
     else:
         Browser().load(URL(sys.argv[1]))
         tkinter.mainloop()
