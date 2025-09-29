@@ -5,9 +5,9 @@ import os
 import base64
 import time
 import gzip
+import tkinter
 
 # py Browser.py https://example.org
-# py Browser.py file:///D:\Codes\Python\WebBrowser\Default.html
 
 # Global dictionary to store open sockets
 open_sockets = {}
@@ -15,6 +15,12 @@ open_sockets = {}
 # Global dictionary to store responses
 cached_responses = {}
 
+# Global variables for the GUI
+WIDTH, HEIGHT = 800, 600
+HSTEP, VSTEP = 13, 18
+SCROLL_STEP = 100
+
+# Global variables to control redirects
 redirects_number=0
 redirects_limit=10
 
@@ -285,11 +291,12 @@ class URL:
 
         return content.decode("utf8")
     
-def show(body, view_source=False):
+def lex(body, view_source=False):
     if view_source:
         # Show the source code complete, with < and >
         body = body.replace("<", "&lt;").replace(">", "&gt;")
 
+    text = ""
     in_tag = False
     entity = ""
     entities = {"&lt;": "<", "&gt;": ">"}
@@ -299,13 +306,13 @@ def show(body, view_source=False):
         if c == "<":
             in_tag = True
             if entity:
-                print(entity, end="")
+                text += entity
                 entity = ""
             i += 1
         elif c == ">":
             in_tag = False
             if entity:
-                print(entity, end="")
+                text += entity
                 entity = ""
             i += 1
         elif not in_tag:
@@ -320,35 +327,110 @@ def show(body, view_source=False):
                     entity += ";"
                     i += 1
                     if entity in entities:
-                        print(entities[entity], end="")
+                        text += entities[entity]
                     else:
-                        print(entity, end="")
+                        text += entity
                     entity = ""
                 else:
-                    print(entity, end="")
+                    text += entity
                     entity = ""
             else:
                 if entity:
-                    print(entity, end="")
+                    text += entity
                     entity = ""
-                print(c, end="")
+                text += c
                 i += 1
         else:
             if entity:
-                print(entity, end="")
+                text += entity
                 entity = ""
             i += 1
+    return text
 
-def load(url):
+# Create the gui
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    biggest_y = 0
+    for c in text:
+        # Support to newline characters
+        if c == "\n":
+            cursor_x = HSTEP
+            cursor_y += (VSTEP + 10)
+
+        display_list.append((cursor_x, cursor_y, c))
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP
+            cursor_x = HSTEP
+        if cursor_y > biggest_y: biggest_y = cursor_y
+    return display_list, biggest_y
+
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        self.scroll = 0
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=WIDTH,
+            height=HEIGHT
+        )
+        self.canvas.pack()
+
+    # Scroll through the page
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+        self.window.bind("<Button-4>", self.scrollup) # Linux Support
+        self.window.bind("<Button-5>", self.scrolldown) # Linux Support
+        self.window.bind("<MouseWheel>", self.mouseWheelScroll)
+        
+    def mouseWheelScroll(self, e):
+        if os.name == 'nt':  # Windows
+            scroll_amount = -e.delta // 60 * SCROLL_STEP
+        elif os.name == 'posix':  # Linux / Mac
+            scroll_amount = e.delta // 60 * SCROLL_STEP
+        else:
+            scroll_amount = 0  # fallback if another OS
+            
+        if self.scroll + scroll_amount < 0:
+            self.scroll = 0
+        elif self.scroll + scroll_amount > (self.biggest_y + VSTEP) - HEIGHT:
+            self.scroll = (self.biggest_y + VSTEP) - HEIGHT
+        else:
+            self.scroll += scroll_amount
+        self.draw()
+        
+    def scrolldown(self, e):
+        if self.scroll + SCROLL_STEP > (self.biggest_y + VSTEP) - HEIGHT: return
+        self.scroll += SCROLL_STEP
+        self.draw()
+    
+    def scrollup(self, e):
+        if self.scroll - SCROLL_STEP < 0: return
+        self.scroll -= SCROLL_STEP
+        self.draw()
+
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT: continue
+            if y + VSTEP < self.scroll: continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+
+    def load(self, url):
         global redirects_number
         redirects_number = 0 # Restart redirects counter everytime loads a URL
         body = url.request()
-        show(body, url.view_source)
+        text = lex(body, url.view_source)
+        self.display_list, self.biggest_y = layout(text)
+        self.draw()
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) <= 1:
         default_file = os.path.join(os.path.dirname(__file__), "Default.html")
-        load(URL(f"file:///{default_file}"))
+        Browser().load(URL(f"file:///{default_file}"))
     else:
-        load(URL(sys.argv[1]))
-        
+        Browser().load(URL(sys.argv[1]))
+        tkinter.mainloop()
