@@ -16,9 +16,11 @@ open_sockets = {}
 cached_responses = {}
 
 # Global variables for the GUI
-WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
+SCROLLBAR_WIDTH = 12
+EMOJI_SIZE = 18
+EMOJI_FOLDER = "openmoji-72x72-color"
 
 # Global variables to control redirects
 redirects_number=0
@@ -44,9 +46,14 @@ class URL:
                 self.scheme = "data"
                 url = url[5:]  # Remove "data:"
             else:
+                if "://" not in url or url == "about:blank":
+                    self.host = ""
+                    self.port = None
+                    self.path = "about:blank"
+                    return
                 self.scheme, url = url.split("://", 1)
+                # Changes to about blank or fallback
             assert self.scheme in ["http", "https", "file", "data"]
-
             if self.scheme in ["http", "https"]:
                 if self.scheme == "http":
                     self.port = 80
@@ -86,6 +93,10 @@ class URL:
         # Global variables
         global redirects_limit
         global redirects_number
+
+        # If about:blank URL
+        if self.path == "about:blank":
+            return "<>"
 
         # Open local files
         if self.scheme == "file":
@@ -348,7 +359,7 @@ def lex(body, view_source=False):
     return text
 
 # Create the gui
-def layout(text):
+def layout(text, width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     biggest_y = 0
@@ -357,12 +368,25 @@ def layout(text):
         if c == "\n":
             cursor_x = HSTEP
             cursor_y += (VSTEP + 10)
+            continue
 
-        display_list.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
+        code = f"{ord(c):X}"
+        path = os.path.join(os.path.dirname(__file__), EMOJI_FOLDER, code + ".png")
+        if os.path.exists(path):
+            w = EMOJI_SIZE
+        else:
+            w = HSTEP
+
+        if cursor_x + w >= width - HSTEP:
             cursor_y += VSTEP
             cursor_x = HSTEP
+
+        if os.path.exists(path):
+            display_list.append(("image", cursor_x, cursor_y, path))
+        else:
+            display_list.append(("text", cursor_x, cursor_y, c))
+
+        cursor_x += w
         if cursor_y > biggest_y: biggest_y = cursor_y
     return display_list, biggest_y
 
@@ -370,12 +394,17 @@ class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
         self.scroll = 0
+        self.content_height = 0
+        self.width = 800
+        self.height = 600
+        self.emoji_images = {}
         self.canvas = tkinter.Canvas(
             self.window,
-            width=WIDTH,
-            height=HEIGHT
+            width=self.width,
+            height=self.height
         )
-        self.canvas.pack()
+        self.canvas.pack(fill=tkinter.BOTH, expand=True)
+        self.window.bind("<Configure>", self.resize)
 
     # Scroll through the page
         self.window.bind("<Down>", self.scrolldown)
@@ -395,12 +424,13 @@ class Browser:
         # Calculates new scroll position
         new_scroll = self.scroll + scroll_amount
             
-        max_scroll = max(0, (self.biggest_y + VSTEP) - HEIGHT)
+        max_scroll = max(0, (self.biggest_y + VSTEP) - self.height)
         self.scroll = max(0, min(new_scroll, max_scroll))
         self.draw()
         
     def scrolldown(self, e):
-        if self.scroll + SCROLL_STEP > (self.biggest_y + VSTEP) - HEIGHT: return
+        max_scroll = max(0, (self.biggest_y + VSTEP) - self.height)
+        if self.scroll + SCROLL_STEP > max_scroll: return
         self.scroll += SCROLL_STEP
         self.draw()
     
@@ -409,19 +439,65 @@ class Browser:
         self.scroll -= SCROLL_STEP
         self.draw()
 
+    # Support to resize screen
+    def resize(self, event):
+        self.width = event.width
+        self.height = event.height
+        if hasattr(self, 'text'):
+            # First pass: layout with full width to check if scrollbar is needed
+            _, temp_biggest_y = layout(self.text, self.width)
+            temp_content_height = temp_biggest_y + VSTEP
+            if temp_content_height > self.height:
+                self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH)
+            else:
+                self.display_list, self.biggest_y = layout(self.text, self.width)
+            self.draw()
+
     def draw(self):
         self.canvas.delete("all")
-        for x, y, c in self.display_list:
-            if y > self.scroll + HEIGHT: continue
+        for item in self.display_list:
+            typ, x, y, val = item
+            if y > self.scroll + self.height: continue
             if y + VSTEP < self.scroll: continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
+            if typ == "text":
+                self.canvas.create_text(x, y - self.scroll, text=val)
+            elif typ == "image":
+                code = os.path.splitext(os.path.basename(val))[0]
+                if code not in self.emoji_images:
+                    try:
+                        img = tkinter.PhotoImage(file=val).subsample(3, 3)
+                        self.emoji_images[code] = img
+                    except Exception as e:
+                        print(f"Error loading emoji {code}: {e}")
+                        continue
+                self.canvas.create_image(x, y - self.scroll, image=self.emoji_images[code], anchor="center")
+
+        # Draw scrollbar
+        self.content_height = self.biggest_y + VSTEP
+        if self.content_height > self.height:
+            track_x = self.width - SCROLLBAR_WIDTH
+            track_y = 0
+            track_height = self.height
+            viewport_height = self.height
+            max_scroll = self.content_height - viewport_height
+            thumb_height = (viewport_height / self.content_height) * track_height
+            fraction = self.scroll / max_scroll if max_scroll > 0 else 0
+            thumb_y = fraction * (track_height - thumb_height)
+            self.canvas.create_rectangle(track_x, thumb_y, track_x + SCROLLBAR_WIDTH, thumb_y + thumb_height, fill='black')
+
 
     def load(self, url):
         global redirects_number
         redirects_number = 0 # Restart redirects counter everytime loads a URL
         body = url.request()
-        text = lex(body, url.view_source)
-        self.display_list, self.biggest_y = layout(text)
+        self.text = lex(body, url.view_source)
+        # First pass: layout with full width to check if scrollbar is needed
+        _, temp_biggest_y = layout(self.text, self.width)
+        temp_content_height = temp_biggest_y + VSTEP
+        if temp_content_height > self.height:
+            self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH)
+        else:
+            self.display_list, self.biggest_y = layout(self.text, self.width)
         self.draw()
 
 
