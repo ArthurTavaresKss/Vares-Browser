@@ -29,6 +29,7 @@ redirects_limit=10
 class URL:
     def __init__(self, url):
         self.view_source = False
+        self.right_to_left_text = False
         if url.startswith("view-source:"):
             self.view_source = True
             url = url[12:]  # Remove "view-source:"
@@ -41,6 +42,15 @@ class URL:
             self.mime_type = getattr(inner_url, 'mime_type', None)
             self.is_base64 = getattr(inner_url, 'is_base64', False)
             self.data = getattr(inner_url, 'data', None)
+        # If url starts with "rlt:" then show text right to left
+        elif url.startswith("rlt:"):
+            self.right_to_left_text = True
+            url = url[4:] # Remove "rlt:"
+            inner_url = URL(url)
+            self.scheme = inner_url.scheme
+            self.host = inner_url.host
+            self.port = inner_url.port
+            self.path = inner_url.path
         else:
             if url.startswith("data:"):
                 self.scheme = "data"
@@ -302,9 +312,9 @@ class URL:
 
         return content.decode("utf8")
     
-def lex(body, view_source=False):
+def lex(body, view_source=False, right_to_left=False):
+    # Handle view-source mode by escaping HTML tags
     if view_source:
-        # Show the source code complete, with < and >
         body = body.replace("<", "&lt;").replace(">", "&gt;")
 
     text = ""
@@ -312,6 +322,8 @@ def lex(body, view_source=False):
     entity = ""
     entities = {"&lt;": "<", "&gt;": ">"}
     i = 0
+
+    # Process body character by character
     while i < len(body):
         c = body[i]
         if c == "<":
@@ -330,7 +342,7 @@ def lex(body, view_source=False):
             if c == "&":
                 entity = "&"
                 i += 1
-                # Read until next ';'
+                # Read until next ';' or limit to 5 characters
                 while i < len(body) and body[i] != ";" and len(entity) < 5:
                     entity += body[i]
                     i += 1
@@ -356,42 +368,74 @@ def lex(body, view_source=False):
                 text += entity
                 entity = ""
             i += 1
+
+    # If RTL mode is enabled, reverse the order of words
+    if right_to_left:
+        # Split text into lines
+        lines = text.split("\n")
+        reversed_lines = []
+        for line in lines:
+            # Reverse their order
+            reversed_line = line[::-1]
+            # Join words back into a line
+            reversed_lines.append(reversed_line)
+        # Join lines back into text
+        text = "\n".join(reversed_lines)
+
     return text
 
-# Create the gui
-def layout(text, width):
+def layout(text, width, text_right_to_left):
+    # Initialize display list and cursor position
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     biggest_y = 0
+    
+    # Set initial x position to the right edge for RTL mode
+    if text_right_to_left:
+        cursor_x = width - HSTEP
+    
+    # Process each character in the text
     for c in text:
-        # Support to newline characters
+        # Handle newline characters
         if c == "\n":
-            cursor_x = HSTEP
-            cursor_y += (VSTEP + 10)
+            cursor_y += VSTEP + 10
+            cursor_x = width - HSTEP if text_right_to_left else HSTEP
             continue
 
+        # Check for emoji support using Unicode code point
         code = f"{ord(c):X}"
         path = os.path.join(os.path.dirname(__file__), EMOJI_FOLDER, code + ".png")
-        if os.path.exists(path):
-            w = EMOJI_SIZE
+        w = EMOJI_SIZE if os.path.exists(path) else HSTEP
+
+        # Check for line break
+        if text_right_to_left:
+            # Break line when cursor approaches the left edge
+            if cursor_x - w < HSTEP:
+                cursor_y += VSTEP
+                cursor_x = width - HSTEP
         else:
-            w = HSTEP
+            # Break line when cursor approaches the right edge
+            if cursor_x + w >= width - HSTEP:
+                cursor_y += VSTEP
+                cursor_x = HSTEP
 
-        if cursor_x + w >= width - HSTEP:
-            cursor_y += VSTEP
-            cursor_x = HSTEP
-
+        # Add character or emoji to display list
         if os.path.exists(path):
             display_list.append(("image", cursor_x, cursor_y, path))
         else:
             display_list.append(("text", cursor_x, cursor_y, c))
 
-        cursor_x += w
-        if cursor_y > biggest_y: biggest_y = cursor_y
+        # Update cursor position: move left for RTL, right for LTR
+        cursor_x += -w if text_right_to_left else w
+        if cursor_y > biggest_y:
+            biggest_y = cursor_y
+
     return display_list, biggest_y
 
+
 class Browser:
-    def __init__(self):
+    def __init__(self, text_left_to_right):
+        self.text_left_to_right = text_left_to_right
         self.window = tkinter.Tk()
         self.scroll = 0
         self.content_height = 0
@@ -445,12 +489,12 @@ class Browser:
         self.height = event.height
         if hasattr(self, 'text'):
             # First pass: layout with full width to check if scrollbar is needed
-            _, temp_biggest_y = layout(self.text, self.width)
+            _, temp_biggest_y = layout(self.text, self.width, self.text_left_to_right)
             temp_content_height = temp_biggest_y + VSTEP
             if temp_content_height > self.height:
-                self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH)
+                self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH, self.text_left_to_right)
             else:
-                self.display_list, self.biggest_y = layout(self.text, self.width)
+                self.display_list, self.biggest_y = layout(self.text, self.width, self.text_left_to_right)
             self.draw()
 
     def draw(self):
@@ -490,14 +534,14 @@ class Browser:
         global redirects_number
         redirects_number = 0 # Restart redirects counter everytime loads a URL
         body = url.request()
-        self.text = lex(body, url.view_source)
+        self.text = lex(body, url.view_source, self.text_left_to_right)
         # First pass: layout with full width to check if scrollbar is needed
-        _, temp_biggest_y = layout(self.text, self.width)
+        _, temp_biggest_y = layout(self.text, self.width, self.text_left_to_right)
         temp_content_height = temp_biggest_y + VSTEP
         if temp_content_height > self.height:
-            self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH)
+            self.display_list, self.biggest_y = layout(self.text, self.width - SCROLLBAR_WIDTH, self.text_left_to_right)
         else:
-            self.display_list, self.biggest_y = layout(self.text, self.width)
+            self.display_list, self.biggest_y = layout(self.text, self.width, self.text_left_to_right)
         self.draw()
 
 
@@ -508,5 +552,6 @@ if __name__ == "__main__":
         Browser().load(URL(f"file:///{default_file}"))
         tkinter.mainloop()
     else:
-        Browser().load(URL(sys.argv[1]))
+        url = URL(sys.argv[1])
+        Browser(url.right_to_left_text).load(url)
         tkinter.mainloop()
