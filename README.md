@@ -1,4 +1,4 @@
-# README NÃO ATUALIZADO
+# README NÃO ATUALIZADO (VERSÃO DO README: 1.3.1 | VERSÃO ATUAL : 1.4.0)
 
 # Vares Browser
 
