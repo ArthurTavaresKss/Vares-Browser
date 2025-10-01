@@ -1,3 +1,5 @@
+# README NÃO ATUALIZADO
+
 # Vares Browser
 
 **Status: Trabalho em Progresso (Fase Inicial com Interface Gráfica Avançada)**
