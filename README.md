@@ -1,5 +1,5 @@
 # Vares Browser
-## (VERSÃO DO README: 1.3.1 | VERSÃO ATUAL : 1.4.0)
+## (VERSÃO DO README: 1.3.0 | VERSÃO ATUAL : 2.0.0)
 
 **Status: Trabalho em Progresso (Fase Inicial com Interface Gráfica Avançada)**
 

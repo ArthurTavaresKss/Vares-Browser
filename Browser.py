@@ -13,6 +13,7 @@ import tkinter.font
 # Global dictionaries to manage open sockets and cached responses
 open_sockets = {}  # Stores active socket connections for reuse
 cached_responses = {}  # Stores HTTP responses with their expiry times
+FONTS = {} # Global fonts dictionary, caches fonts to prevent repeatedly measuring then
 
 # GUI constants for layout and rendering
 HSTEP, VSTEP = 13, 18  # Horizontal and vertical spacing for text
@@ -376,76 +377,150 @@ def lex(body, view_source=False, right_to_left=False):
         out = reversed_out
     return out
 
+def get_font(size, weight, style):
+    key = (size, weight, style)
+    if key not in FONTS:
+        font = tkinter.font.Font(
+            size=size,
+            weight=weight,
+            slant=style
+        )
+        label = tkinter.Label(font=font)
+        FONTS[key] = (font, label)
+    return FONTS[key][0]
+
 class Layout:
     def __init__(self, tokens, width, text_right_to_left):
         self.display_list = []
+        self.display_lines = []
         self.cursor_x = HSTEP
         self.cursor_y = VSTEP
         self.biggest_y = 0
         self.weight = "normal"
         self.style = "roman"
-        self.size = 12  # Default font size
+        self.size = 14  # Default font size
         self.width = width
         self.text_right_to_left = text_right_to_left
+        self.first_content = False  # Flag to track if non-empty content has been rendered
         if text_right_to_left:
-            self.cursor_x = width - HSTEP  # Start from right for RTL
+            self.cursor_x = width - HSTEP
         for tok in tokens:
             self.token(tok)
+        self.flush()
 
     def token(self, tok):
         if isinstance(tok, Text):
-            lines = tok.text.split("\n")  # Split text into lines
+            lines = tok.text.split("\n")
             for i, line in enumerate(lines):
-                words = line.split()  # Split line into words
+                words = line.split()
                 if not words:
-                    # Handle empty lines (explicit newline)
-                    font = tkinter.font.Font(size=self.size, weight=self.weight, slant=self.style)
-                    self.cursor_y += font.metrics("linespace") * 1.25
-                    self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+                    # Only advance cursor_y for empty lines after first content
+                    if self.first_content:
+                        self.flush()
+                        font = get_font(self.size, self.weight, self.style)
+                        self.cursor_y += font.metrics("linespace") * 1.25
+                        self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
                     continue
                 for word in words:
                     self.word(word)
-                # Only advance to a new line for explicit newlines, not after every text node
-                if i < len(lines) - 1:  # If not the last line
-                    font = tkinter.font.Font(size=self.size, weight=self.weight, slant=self.style)
+                    self.first_content = True  # Mark that we've rendered content
+                # Only advance for explicit newlines after first content
+                if i < len(lines) - 1 and self.first_content:
+                    self.flush()
+                    font = get_font(self.size, self.weight, self.style)
                     self.cursor_y += font.metrics("linespace") * 1.25
                     self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+        elif tok.tag == "br":
+            if self.first_content:
+                self.flush()
+                font = get_font(self.size, self.weight, self.style)
+                self.cursor_y += font.metrics("linespace") * 1.25
+                self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+        elif tok.tag == "/p":
+            if self.first_content:
+                self.flush()
+                font = get_font(self.size, self.weight, self.style)
+                self.cursor_y += font.metrics("linespace") * 1.25
+                self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
         elif tok.tag == "i":
-            self.style = "italic"  # Set italic style
+            self.style = "italic"
         elif tok.tag == "/i":
-            self.style = "roman"  # Reset to normal style
+            self.style = "roman"
         elif tok.tag == "b":
-            self.weight = "bold"  # Set bold weight
+            self.weight = "bold"
         elif tok.tag == "/b":
-            self.weight = "normal"  # Reset to normal weight
+            self.weight = "normal"
         elif tok.tag == "small":
-            self.size = 10  # Decrease size
+            self.size = 10
         elif tok.tag == "/small":
-            self.size = 12  # Restore size
+            self.size = 14
         elif tok.tag == "big":
-            self.size = 18  # Increase size
+            self.size = 18
         elif tok.tag == "/big":
-            self.size = 12  # Restore size
+            self.size = 14
         if self.cursor_y > self.biggest_y:
-            self.biggest_y = self.cursor_y  # Update maximum height
+            self.biggest_y = self.cursor_y
 
     def word(self, word):
-        font = tkinter.font.Font(size=self.size, weight=self.weight, slant=self.style)
-        w = font.measure(word)  # Measure word width
+        font = get_font(self.size, self.weight, self.style)
+        w = font.measure(word)
+        space_width = font.measure(" ")
+        available_width = self.width - HSTEP - self.cursor_x if not self.text_right_to_left else self.cursor_x - HSTEP
+
+        # Handle long words by breaking them if they exceed the available width
+        if w > available_width:
+            current_word = ""
+            for char in word:
+                char_width = font.measure(char)
+                if char_width > available_width:
+                    continue
+                if font.measure(current_word + char) > available_width:
+                    if current_word:
+                        self.display_lines.append(("text", self.cursor_x, current_word, font))
+                        self.cursor_x += (-font.measure(current_word) - space_width if self.text_right_to_left else font.measure(current_word) + space_width)
+                    self.flush()
+                    self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+                    available_width = self.width - 2 * HSTEP
+                    current_word = char
+                else:
+                    current_word += char
+            if current_word:
+                word = current_word
+                w = font.measure(word)
+            else:
+                return
+
+        # Normal wrapping for words that fit
         if self.text_right_to_left:
-            # Check for line break in RTL mode
             if self.cursor_x - w < HSTEP:
-                self.cursor_y += font.metrics("linespace") * 1.25
+                self.flush()
                 self.cursor_x = self.width - HSTEP
         else:
-            # Check for line break in LTR mode
             if self.cursor_x + w > self.width - HSTEP:
-                self.cursor_y += font.metrics("linespace") * 1.25
+                self.flush()
                 self.cursor_x = HSTEP
-        # Add text to display list
-        self.display_list.append(("text", self.cursor_x, self.cursor_y, word, font))
-        # Update cursor position
-        self.cursor_x += (-w - font.measure(" ") if self.text_right_to_left else w + font.measure(" "))
+
+        self.display_lines.append(("text", self.cursor_x, word, font))
+        self.cursor_x += (-w - space_width if self.text_right_to_left else w + space_width)
+
+    def flush(self):
+        if not self.display_lines:
+            # Only advance cursor_y if content has been rendered
+            if self.first_content:
+                font = get_font(self.size, self.weight, self.style)
+                self.cursor_y += font.metrics("linespace") * 1.25
+            self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+            return
+        metrics = [font.metrics() for type, x, word, font in self.display_lines]
+        max_ascent = max([metric["ascent"] for metric in metrics])
+        baseline = self.cursor_y + 1.25 * max_ascent
+        for type, x, word, font in self.display_lines:
+            y = baseline - font.metrics("ascent")
+            self.display_list.append((type, x, y, word, font))
+        max_descent = max([metric["descent"] for metric in metrics])
+        self.cursor_y = baseline + 1.25 * max_descent
+        self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+        self.display_lines = []
 
 class Browser:
     def __init__(self, text_left_to_right):
