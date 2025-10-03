@@ -402,6 +402,8 @@ class Layout:
         self.width = width
         self.text_right_to_left = text_right_to_left
         self.first_content = False  # Flag to track if non-empty content has been rendered
+        self.centered_text = False
+        self.sup_tag = False
         if text_right_to_left:
             self.cursor_x = width - HSTEP
         for tok in tokens:
@@ -420,6 +422,13 @@ class Layout:
                         font = get_font(self.size, self.weight, self.style)
                         self.cursor_y += font.metrics("linespace") * 1.25
                         self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+                    continue
+                if self.centered_text:
+                    font = get_font(self.size, self.weight, self.style)
+                    line_width = font.measure(line)
+                    self.cursor_x = (self.width / 2) - (line_width / 2)
+                    for word in words:
+                        self.word(word)
                     continue
                 for word in words:
                     self.word(word)
@@ -442,6 +451,18 @@ class Layout:
                 font = get_font(self.size, self.weight, self.style)
                 self.cursor_y += font.metrics("linespace") * 1.25
                 self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
+        elif tok.tag == "h1 class=\"title\"":
+            self.centered_text = True
+            self.size = 29
+        elif tok.tag == "/h1":
+            self.centered_text = False
+            self.size = 14
+        elif tok.tag == "sup":
+            self.size = 7
+            self.sup_tag = True
+        elif tok.tag == "/sup":
+            self.size = 14
+            self.sup_tag = False
         elif tok.tag == "i":
             self.style = "italic"
         elif tok.tag == "/i":
@@ -500,7 +521,7 @@ class Layout:
                 self.flush()
                 self.cursor_x = HSTEP
 
-        self.display_lines.append(("text", self.cursor_x, word, font))
+        self.display_lines.append(("text", self.cursor_x, word, font, self.sup_tag))
         self.cursor_x += (-w - space_width if self.text_right_to_left else w + space_width)
 
     def flush(self):
@@ -511,12 +532,16 @@ class Layout:
                 self.cursor_y += font.metrics("linespace") * 1.25
             self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
             return
-        metrics = [font.metrics() for type, x, word, font in self.display_lines]
+        metrics = [font.metrics() for type, x, word, font, sup in self.display_lines]
         max_ascent = max([metric["ascent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
-        for type, x, word, font in self.display_lines:
-            y = baseline - font.metrics("ascent")
-            self.display_list.append((type, x, y, word, font))
+        for typ, x, word, font, sup in self.display_lines:
+            if sup:
+                # Raise superscripted text by half the font's ascent
+                y = baseline - font.metrics("ascent") * 1.5
+            else:
+                y = baseline - font.metrics("ascent")
+            self.display_list.append((typ, x, y, word, font))
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + 1.25 * max_descent
         self.cursor_x = self.width - HSTEP if self.text_right_to_left else HSTEP
